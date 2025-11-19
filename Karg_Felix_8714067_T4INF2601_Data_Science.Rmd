@@ -1,0 +1,417 @@
+---
+output:
+  html_notebook:
+    df_print: paged
+    toc: true
+    number_sections: true
+    fig_caption: true
+    css: style.css
+  pdf_document:
+    latex_engine: pdflatex
+    toc: true
+    number_sections: true
+    fig_caption: true
+  html_document:
+    df_print: paged
+    toc: true
+    number_sections: true
+    fig_caption: true
+    css: style.css
+bibliography: literatur.bib
+reference-section-title: "Literaturverzeichnis"
+---
+
+```{r setup, include=FALSE}
+# Globale Chunk-Optionen
+library(knitr)
+
+if (knitr::is_html_output()) {
+  knitr::opts_chunk$set(
+    dev       = "png",
+    dpi       = 96,
+    fig.retina= 2,
+    fig.align = "center",
+    fig.width = 8, fig.height = 5,
+    out.width = "100%",
+    message = FALSE, warning = FALSE
+  )
+} else {
+  knitr::opts_chunk$set(
+    dev       = "cairo_pdf",
+    fig.align = "center",
+    fig.width = 7, fig.height = 4.5,
+    message = FALSE, warning = FALSE
+  )
+}
+```
+
+\newpage
+
+# Beschreibung des Datensatzes – Fokus auf die Zielvariable Passantenanzahl
+
+## Herkunft und Ziel der Datenerhebung
+
+Der Datensatz *passanten_wuerzburg.csv* stammt aus dem Open Data Portal der Stadt Würzburg und basiert auf kontinuierlichen, automatisierten Passantenzählungen im öffentlichen Raum. Die Erhebung wird im Rahmen des Projekts „Smarte Region Würzburg“ durchgeführt, das die digitale Transformation der Innenstadt begleitet. Ziel ist es, mithilfe objektiver Frequenzdaten ein realistisches Lagebild über die Besucherströme zu gewinnen, um Stadtmarketing, Einzelhandel und Stadtentwicklung datenbasiert zu unterstützen.
+
+Die Datenerhebung begann im April 2019 an der Schönbornstraße und wurde im Oktober 2022 auf die Kaiserstraße und Spiegelstraße ausgeweitet. Die Daten liegen stündlich aggregiert vor und sind über das Open-Data-Portal abrufbar (Datenlizenz: *DL-DE-BY 2.0*) [@openDataWuerzburg].
+
+------------------------------------------------------------------------
+
+## Messmethodik
+
+Die Messung erfolgt durch das Unternehmen [hystreet.com](hystreet.com) mithilfe von fest installierten Laserscannern des Typs PeCo LC. Diese Geräte erzeugen einen vierfachen Lichtvorhang, der jede Person erfasst, die eine gedachte Linie im Straßenraum überschreitet. Wichtige Eigenschaften laut Herstellerangabe:
+
+-   Zählprinzip: Jede Passage einer Person über die Messlinie wird als Ereignis gezählt – auch bei mehrmaligem Überqueren.
+-   Auflösung: Stündliche Aggregation, 24 Stunden am Tag, 365 Tage im Jahr.
+-   Zählgenauigkeit: Bis zu 99 % bei Durchflussraten bis 500 Personen pro Minute.
+-   Anonymität: Keine Erfassung personenbezogener Merkmale; datenschutzrechtlich unbedenklich.
+-   Differenzierung: Erfassung nach Laufrichtung und Körpergröße (Kinder / Erwachsene), wobei im vorliegenden Datensatz nur die Gesamtanzahl der Passanten (Variable: Passanten) betrachtet wird.
+
+------------------------------------------------------------------------
+
+## Datenstruktur und Variablen
+
+Der Datensatz enthält folgende (in Scope) Variablen:
+
+| Variable | Beschreibung |
+|------------------------------------|------------------------------------|
+| **Zeitstempel** | Datum und Uhrzeit der Messung, stündlich |
+| **Wetter** | Kategorische Angabe der Wetterlage |
+| **Temperatur** | Gemessene Umgebungstemperatur (°C) |
+| **Passanten** | **Zielvariable** – Anzahl der Personen, die innerhalb einer Stunde die Messlinie überschritten haben |
+| **Location Name** | Name der Messstelle |
+| **GeoPunkt** | Geokoordinaten des Messstandorts |
+
+: Übersicht der im Datensatz enthaltenen Variablen [@openDataWuerzburg]
+
+## Lage der Messstellen anhand einer Karte der Würzburger Innenstadt
+
+-   Die erste installierte Messstelle befindet sich in der Haupteinkaufsstraße Würzburgs. Die **Schönbornstraße**. Sie liegt zwischen dem Dom und dem Falkenhaus, einem der am stärksten frequentierten Bereiche der Stadt.
+
+-   Seit Oktober 2022 ist eine Messstelle in der **Kaiserstraße** aktiv. Diese Straße verbindet den Bahnhofsvorplatz mit der Innenstadt und bildet eine Hauptachse für Pendler und Besucher, die aus Richtung Hauptbahnhof kommen.
+
+-   Ebenfalls seit Oktober 2022 Teil des Messnetzes ist die **Spiegelstraße**. Diese Straße liegt parallel zur Schönbornstraße und wird von zahlreichen kleineren Geschäften und Cafés gesäumt.
+
+In der folgenden Karte wird mithilfe von OSM ein Ausschnitt der Würzburger Innenstadt dargestellt. Dabei sind die Messbereiche farbig hinterlegt. Schönbornstraße in \textcolor{green}{grün}, Kaiserstraße in \textcolor{cyan}{blau}, Spiegelstraße in \textcolor{red}{rot}.
+
+```{r}
+library(sf)
+library(dplyr)
+library(ggplot2)
+library(ggspatial)
+library(readr)
+library(lubridate)
+library(tidyr)
+library(fmsb)
+library(paletteer)
+```
+
+```{r}
+messbereiche_polygone <- read.csv("messbereiche_polygone.csv", sep = ";")
+messbereiche_polygone$Längengrad <- as.numeric(gsub(",", ".", messbereiche_polygone$Längengrad))
+messbereiche_polygone$Breitengrad <- as.numeric(gsub(",", ".", messbereiche_polygone$Breitengrad))
+
+# Erstelle die Polygone der Straßen
+polygons <- messbereiche_polygone %>%
+  group_by(Straße) %>%
+  arrange(Point.ID)%>%
+  summarise(
+    geometry = st_sfc(st_polygon(list(as.matrix(cbind(Längengrad, Breitengrad))))),
+    .groups = 'drop'
+  )
+
+polygons_sf <- st_as_sf(polygons, crs = 4326)
+
+# Plot mit OSM Hintergrund
+ggplot(polygons_sf) +
+  annotation_map_tile(type = "osm", zoom = 17) +
+  geom_sf(aes(fill = Straße), color = "black", alpha = 0.6) +
+  theme_void() +
+  labs(title = "Messbereiche in Würzburg") +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "bottom",
+    legend.box = "horizontal"
+  )
+
+```
+
+# Passantenanzahl als Jahressumme & Mittelwert pro Monat, Woche, Tag, Stunde
+
+```{r}
+passanten <- read_csv2("passanten_wuerzburg.csv")
+
+# In-Scope Variablen auswählen, 
+# Zeitspalten umwandeln und neue Zeitvariablen 
+# erstellen als Vorbereitung für spätere Aufgaben
+passanten_clean <- passanten %>%
+  select(Zeitstempel,Wetter,Temperatur,Passanten,'Location Name',GeoPunkt) %>%
+  mutate(
+    Jahr = year(Zeitstempel),
+    Monat = month(Zeitstempel),
+    Woche = isoweek(Zeitstempel),
+    Tag = day(Zeitstempel),
+    Stunde = hour(Zeitstempel),
+    Wochentag = weekdays(Zeitstempel),
+    TagImJahr = yday(Zeitstempel)
+  ) %>%
+  filter(Jahr != 2023)
+```
+
+```{r}
+jahressumme <- passanten_clean %>%
+  group_by(`Location Name`) %>%
+  summarise(Jahressumme = sum(Passanten, na.rm=TRUE), 'Mittelwert Monat' = Jahressumme/12, 'Mittelwert Woche' = Jahressumme/(366/7), 'Mittelwert Tag' = Jahressumme/366, 'Mittelwert Stunde' = mean(Passanten, na.rm=TRUE)) %>%
+  ungroup()
+
+kable(jahressumme, digits = 0,
+      caption = "Jahressumme und Mittelwerte der Passantenanzahl nach Messstelle")
+```
+
+## Interpretation der Ergebnisse
+
+Die Jahressummen der Passantenanzahl in Würzburg zeigen deutliche Unterschiede zwischen den drei Messstellen.
+
+Die Schönbornstraße hat mit Abstand die höchste Jahressumme, was auf ihre zentrale Lage südlich des Marktplatzes und ihrer Funktion als Haupteinkaufsstraße Würzburgs zurückzuführen ist [@SchoenbornstrasseWuerzburgWiki2025].
+
+Die Kaiserstraße weist ebenfalls hohe Passantenzahlen auf. Das liegt auch an ihrer Lage als Verbindung zwischen dem Hauptbahnhof und der Innenstadt sowie ihrer Nähe zu anderen wichtigen Einkaufsstraßen [@KaiserstrasseWuerzburgWiki2025].
+
+Die Spiegelstraße hat circa die Hälfte der Passantenzahl der Schönbornstraße. Das ist der Tatsache geschuldet dass diese Straße deutlich weniger Möglichkeiten zum Einkaufen und für den Alltag bietet wie z.B. Cafes [@SpiegelstrasseWuerzburgWiki2025].
+
+# Passantenanzahl nach Monatssummen über das Jahr
+
+\vspace{1cm}
+
+```{r}
+passanten_summe_monat <- passanten_clean %>%
+  group_by(`Location Name`, Monat) %>%
+  summarise(Summe_Monat = sum(Passanten, na.rm = TRUE)) %>%
+  ungroup() %>%
+  pivot_wider(
+    names_from = `Location Name`,
+    values_from = Summe_Monat
+  ) %>%
+  mutate(Gesamtsumme = rowSums(across(where(is.numeric)), na.rm = TRUE)) %>%
+  arrange(Monat)
+
+kable(passanten_summe_monat, digits = 0,
+      caption = "Monatliche Passantenzahlen nach Messstelle und Gesamtsumme")
+
+passanten_summe_plot <- passanten_summe_monat %>%
+  pivot_longer(
+    cols = -Monat,
+    names_to = "Location",
+    values_to = "Summe_Monat"
+  )
+
+ggplot(passanten_summe_plot, aes(x = Monat, y = Summe_Monat, color = Location)) +
+  geom_line(linewidth = 1.2) +
+  geom_point(size = 3) +
+  scale_color_manual(values= c("Gesamt" = "black", "Kaiserstraße"= "pink", "Schönbornstraße"= "lightgreen", "Spiegelstraße" = "lightblue")) +
+  labs(
+    title = "Monatliche Passantenzahlen nach Messstelle",
+    subtitle = "Inklusive Gesamtsumme über alle Messstellen",
+    x = "Monat",
+    y = "Summe Passantenanzahl",
+    color = "Messstelle"
+  ) +
+  scale_x_continuous(breaks = c(1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12),
+                    label =c("Jan", "Feb", "März", "April", "Mai", "Juni", "Juli", "Aug", "Sept", "Okt", "Nov", "Dez"))+
+  theme_minimal(base_size = 14) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "bottom",
+    legend.box = "horizontal"
+  )
+
+```
+
+## Interpretation der Ergebnisse
+
+Die aufsummierten monatlichen Passantenzahlen in Würzburg zeigen saisonale Schwankungen. Es zeigt eine leichte konstante Zunahme der Passantenzahlen über das gesamte Jahr.
+
+Anstiege vorallem von Februar auf April, sowie von Juni auf Juli sind auf wärmeres Wetter zurückzuführen. Erstaunlicherweise zeigen insbesondere die kälteren Monate Oktober, November und am meisten Dezember ein deutlich erhöhtes Passantenaufkommen in Würzburg. Dies ist mit dem Weihnachtsgeschäft und den damit verbundenen Einkaufsaktivitäten zu erklären, die viele Menschen in die Innenstadt ziehen.
+
+Ebenfalls gab es zu der Zeit vermehrt Kulturangebote wie z.B. die "Lange Kulturspeichernacht" am 2. November, sowie den "Würzburger Lichterglanz" am 30. November [@MiK2024; @wuerzburger_lichterglanz_2024].
+
+Das in Kombination mit dem Weihnachtsmarkt direkt an der Schönbornstraße erklärt die hohen Passantenzahlen in diesen Monaten und unterstreicht erneut die Unterschiede der Zahlen von Schönborn-/Kaiser- und Spiegelstraße [@weihnachtsmarkt_wuerzburg_2025].
+
+# Durchschnittlicher Tageswert nach Wochentagen
+
+```{r}
+summe_tag <- passanten_clean %>%
+  mutate(Datum = as.Date(Zeitstempel)) %>%
+  group_by(Datum,Wochentag, `Location Name`) %>%
+  summarise(Tagessumme = sum(Passanten, na.rm=TRUE)) %>%
+  ungroup()
+
+
+summe_gesamt_tag <- summe_tag %>%
+  group_by(Datum, Wochentag) %>%
+  summarise(Gesamt_Tagessumme = sum(Tagessumme, na.rm=TRUE)) %>%
+  ungroup()
+
+
+mittelwert_tag_gesamt <- summe_gesamt_tag %>%
+  mutate(Wochentag = factor(Wochentag,
+                            levels = c("Montag", "Dienstag", "Mittwoch", 
+                                       "Donnerstag", "Freitag", "Samstag", "Sonntag"))) %>%
+  group_by(Wochentag) %>%
+  summarise(Mittelwert_Tag_Gesamt = mean(Gesamt_Tagessumme, na.rm=TRUE)) %>%
+  ungroup()
+
+mittelwert_tag_location_plot <- summe_tag %>%
+  mutate(Wochentag = factor(Wochentag,
+                            levels = c("Montag", "Dienstag", "Mittwoch", 
+                                       "Donnerstag", "Freitag", "Samstag", "Sonntag"))) %>%
+  group_by(Wochentag, `Location Name`) %>%
+  summarise(Mittelwert_Tag = mean(Tagessumme, na.rm=TRUE)) %>%
+  ungroup()
+
+mittelwert_tag_location_tabelle <- mittelwert_tag_location_plot %>%
+  pivot_wider(
+    names_from = `Location Name`,
+    values_from = Mittelwert_Tag
+  ) %>%
+  mutate(Gesamtsumme = rowSums(across(where(is.numeric)), na.rm = TRUE))
+
+kable(mittelwert_tag_location_tabelle, digits = 0,
+      caption = "Durchschnittliche Passantenanzahl pro Wochentag nach Messstelle und Gesamtsumme")
+
+ggplot(mittelwert_tag_location_plot, aes(x=Wochentag, y=Mittelwert_Tag, fill=`Location Name`)) +
+  geom_bar(stat = "identity")+
+  labs(title="Durschnittliche Passantenanzahl",
+       subtitle="pro Wochentag",
+       x="Wochentag",
+       y="Passantenanzahl") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "bottom",
+    legend.box = "horizontal"
+  )
+```
+
+## Interpretation der Ergebnisse
+
+Die durchschnittliche Passantenanzahl zeigt ein typisches Muster über die verschiedenen Wochentage hinweg.
+
+Es zeigt eine relativ konstante Anzahl an Passanten von Montag bis Donnerstag. Am Freitag steigt die Passantenanzahl deutlich an, was mit dem Beginn des Wochenendes zusammenhängt. Der Samstag verzeichnet den höchsten Durchschnittswert, was selbstverständlich ebenfalls mit dem Wochenende zusammenhängt. An Samstagen gehen am meisten Personen in ihrer Freizeit zu Geschäften oder nehmen gastronomische Angebote wahr. Am Sonntag sinkt die Passantenanzahl wieder deutlich ab, da in Deutschland alle Geschäfte geschlossen haben.
+
+[@rChartStackedBar]
+
+# Durchschnittlicher Stundenwert über den Tagesverlauf
+
+```{r}
+mittelwert_stunde <- passanten_clean %>%
+  group_by(`Location Name`, Stunde) %>%
+  summarise(Mittelwert_Stunde = mean(Passanten, na.rm=TRUE)) %>%
+  ungroup()
+
+
+mittelwert_stunde_tabelle <- mittelwert_stunde %>%
+  pivot_wider(
+    names_from = `Location Name`,
+    values_from = Mittelwert_Stunde
+  ) %>%
+  mutate(Gesamtsumme = rowSums(across(where(is.numeric)), na.rm = TRUE)) %>%
+  arrange(Stunde)
+
+kable(mittelwert_stunde_tabelle, digits = 1,
+      caption = "Durchschnittliche Passantenanzahl pro Stunde")
+
+mittelwert_stunde_plot <- mittelwert_stunde_tabelle %>%
+  pivot_longer(
+    cols = -Stunde,
+    names_to = "Location",
+    values_to = "Mittelwert_Stunde"
+  )
+
+mittelwert_stunde_plot$Location <- factor(
+  mittelwert_stunde_plot$Location,
+  levels = c("Gesamtsumme", "Schönbornstraße", "Kaiserstraße", "Spiegelstraße")
+)
+
+ggplot(mittelwert_stunde_plot %>% filter(Location != "Gesamtsumme"),
+       aes(x=Stunde, y=Mittelwert_Stunde, fill=Location)) +
+  geom_area(position="dodge", alpha=0.6) +
+  labs(title="Durchschnittliche Passantenanzahl pro Stunde",
+       subtitle="nach Messstelle",
+       x="Stunde",
+       y="Passantenanzahl") +
+  scale_fill_paletteer_d("suffrager::CarolMan") +
+  scale_color_paletteer_d("suffrager::CarolMan") +
+  theme_minimal(base_size=14) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+ggplot(mittelwert_stunde_plot %>% filter(Location == "Gesamtsumme"),
+       aes(x=Stunde, y=Mittelwert_Stunde)) +
+  geom_area(fill="lightgrey", alpha=0.7) +
+  geom_line(color="black", size=1.5) +
+  labs(title="Durchschnittliche Passantenanzahl pro Stunde",
+       subtitle="Über alle Messstellen",
+       x="Stunde",
+       y="Passantenanzahl") +
+  theme_minimal(base_size=14) +
+  theme(plot.title = element_text(hjust = 0.5, face = "bold"),
+        plot.subtitle = element_text(hjust = 0.5),
+        legend.position = "bottom",
+        legend.box = "horizontal")
+
+```
+
+[@rColorPalleteFinder; @rGraphGallery]
+
+------------------------------------------------------------------------
+
+## Interpretation der Ergebnisse
+
+Die durchschnittliche Passantenanzahl pro Stunde über alle Messstellen zeigt eine Normalverteilung.
+
+Sie beginnt niedrig über Nacht, steigt dann am frühen Morgen an und erreicht das Maximum um 14 Uhr. Der Höhepunkt streckt sich allerdings ungefähr von 11 Uhr bis 15 Uhr und nimmt über den Nachmittag wieder kontinuierlich ab.
+
+Bei der Betrachtung der Passantenanzahl nach Messstelle zeigen sich vereinzelte interessante Muster. Die Schönbornstraße weist ab 7:30 Uhr bis 18 Uhr die größte Passantenanzahl auf. Über die Nacht bis in die frühen Morgenstunden zeigen sich andere Bilder. Ab 1 Uhr bis 7 Uhr ist die Kaiserstraße die meistfrequentierte Messstelle, was auf die Verbindung des Hauptbahnhofs und der Altstadt zurückzuführen ist.
+
+\newpage
+
+# Zusatz: Heatmap der Passantenanzahl über das Jahr und den Tagesverlauf
+
+```{r}
+passanten_heatmap <- passanten_clean %>%
+  group_by(TagImJahr, Stunde) %>%
+  summarise(Summe_Passanten = sum(Passanten, na.rm=TRUE)) %>%
+  ungroup()
+ggplot(passanten_heatmap, aes(x=TagImJahr, y=Stunde, fill=Summe_Passanten)) +
+  geom_tile() +
+  scale_fill_viridis_c() +
+  labs(title="Heatmap der Passantenanzahl",
+       subtitle="Summe der Passanten pro Tag im Jahr und Stunde",
+       x="Tag im Jahr",
+       y="Stunde",
+       fill="Passantenanzahl") +
+  theme_minimal(base_size = 14) +
+  theme(plot.title = element_text(hjust = 0.5)) +
+  theme(
+    plot.title = element_text(hjust = 0.5, face = "bold"),
+    plot.subtitle = element_text(hjust = 0.5),
+    legend.position = "bottom",
+    legend.box = "horizontal"
+  )
+```
+
+## Interpretation der Heatmap
+
+Obwohl dies nicht Teil der Projektabgabe war finde ich die Heatmap der Passantenanzahl über das Jahr und den Tagesverlauf sehr interessant.
+
+In dieser sieht man erneut die bereits beschriebenen Muster der Passantenanzahl über den Tagesverlauf sowie über die saisonale Schwankungen. Man sieht die deutlich schwächeren Sonntage, die erhöhte Anzahl tagsüber sowie auch besondere Tage wie bereits vorher erwähnt (Weihnachtsmarkt, Lange Kulturspeichernacht etc.).
+
+Ebenfalls ist die Zeitumstellung in dieser Heatmap sichtbar. Der Block vom 31. März (ca. Tag 90) bis zum 27. Oktober (ca. Tag 300 ) zeigt eine Verschiebung der Passantenanzahl um eine Stunde nach vorne, was auf die Umstellung von Winter- auf Sommerzeit zurückzuführen ist.
+
+\newpage
